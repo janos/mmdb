@@ -1,0 +1,13 @@
+language: go
+
+go:
+  - 1.9.2
+
+install:
+  - go get -v resenje.org/mmdb
+
+before_script:
+  - go vet -v resenje.org/mmdb/...
+
+script:
+  - go test -v resenje.org/mmdb/...
