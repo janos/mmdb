@@ -14,6 +14,8 @@ import (
 	"testing"
 )
 
+var licenseKey = os.Getenv("GO_TEST_MMDB_LICENSE_KEY")
+
 func init() {
 	setTestM5Filename = func(md5Filename string) {
 		testMD5Filename = md5Filename
@@ -32,7 +34,7 @@ func TestUpdateGeoLite2ASN(t *testing.T) {
 	testUpdate(t, UpdateGeoLite2ASN)
 }
 
-func testUpdate(t *testing.T, f func(ctx context.Context, filename string) (saved bool, err error)) {
+func testUpdate(t *testing.T, f func(ctx context.Context, filename, licenseKey string) (saved bool, err error)) {
 	dir, err := ioutil.TempDir("", "mmdb_"+t.Name())
 	if err != nil {
 		t.Fatal(err)
@@ -45,7 +47,7 @@ func testUpdate(t *testing.T, f func(ctx context.Context, filename string) (save
 	defer os.RemoveAll(dir)
 
 	// download a new file
-	saved, err := f(context.Background(), filename)
+	saved, err := f(context.Background(), filename, licenseKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +70,7 @@ func testUpdate(t *testing.T, f func(ctx context.Context, filename string) (save
 	}
 
 	// do not download a new file
-	saved, err = f(context.Background(), filename)
+	saved, err = f(context.Background(), filename, licenseKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,14 +94,8 @@ func testUpdate(t *testing.T, f func(ctx context.Context, filename string) (save
 		t.Error("expected file not to be changed, but it is")
 	}
 
-	fileHash, err := fileMD5(filename)
-	if err != nil {
-		t.Fatal(err)
-	}
-	md5Hash, err := fileMD5(testMD5Filename)
-	if err != nil {
-		t.Fatal(err)
-	}
+	fileHash := fileMD5(t, filename)
+	md5Hash := fileMD5(t, testMD5Filename)
 
 	// simulate update by changing saved files
 	if err := ioutil.WriteFile(filename, []byte("data"), 0666); err != nil {
@@ -110,7 +106,7 @@ func testUpdate(t *testing.T, f func(ctx context.Context, filename string) (save
 	}
 
 	// update
-	saved, err = f(context.Background(), filename)
+	saved, err = f(context.Background(), filename, licenseKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,14 +118,8 @@ func testUpdate(t *testing.T, f func(ctx context.Context, filename string) (save
 		t.Error("expected testMD5Filename to be sat, but it is not")
 	}
 
-	newFileHash, err := fileMD5(filename)
-	if err != nil {
-		t.Fatal(err)
-	}
-	newMD5Hash, err := fileMD5(testMD5Filename)
-	if err != nil {
-		t.Fatal(err)
-	}
+	newFileHash := fileMD5(t, filename)
+	newMD5Hash := fileMD5(t, testMD5Filename)
 
 	if fileHash != newFileHash {
 		t.Error("file hash and updated file hash are not the same")
@@ -139,17 +129,19 @@ func testUpdate(t *testing.T, f func(ctx context.Context, filename string) (save
 	}
 }
 
-func fileMD5(filename string) (hash string, err error) {
+func fileMD5(t *testing.T, filename string) (hash string) {
+	t.Helper()
+
 	file, err := os.Open(filename)
 	if err != nil {
-		return "", err
+		t.Fatal(err)
 	}
 	defer file.Close()
 
 	h := md5.New()
 	_, err = io.Copy(h, file)
 	if err != nil {
-		return "", err
+		t.Fatal(err)
 	}
-	return fmt.Sprintf("%x", h.Sum(nil)), nil
+	return fmt.Sprintf("%x", h.Sum(nil))
 }

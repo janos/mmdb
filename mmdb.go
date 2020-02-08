@@ -17,21 +17,21 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/pkg/errors"
 )
 
 // GeoLite2 download URLs.
 var (
-	geoLite2CityURL    = "http://geolite.maxmind.com/download/geoip/database/GeoLite2-City.tar.gz"
-	geoLite2CountryURL = "http://geolite.maxmind.com/download/geoip/database/GeoLite2-Country.tar.gz"
-	geoLite2ASNURL     = "http://geolite.maxmind.com/download/geoip/database/GeoLite2-ASN.tar.gz"
+	geoLite2CityURL    = "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-City"
+	geoLite2CountryURL = "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-Country"
+	geoLite2ASNURL     = "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-ASN"
 )
 
 // GeoLite2 database filenames inside tar archives.
@@ -44,41 +44,52 @@ var (
 // UpdateGeoLite2Country downloads and updates a GeoLite2 Country database and saves it
 // under filename. MD5 sum of the tar archive is saved in a file in the same directory
 // for update checks.
-func UpdateGeoLite2Country(ctx context.Context, filename string) (saved bool, err error) {
-	return update(ctx, filename, geoLite2CountryFilename, geoLite2CountryURL)
+func UpdateGeoLite2Country(ctx context.Context, filename, licenseKey string) (saved bool, err error) {
+	return update(ctx, filename, geoLite2CountryFilename, geoLite2CountryURL, licenseKey)
 }
 
 // UpdateGeoLite2City downloads and updates a GeoLite2 City database and saves it
 // under filename. MD5 sum of the tar archive is saved in a file in the same directory
 // for update checks.
-func UpdateGeoLite2City(ctx context.Context, filename string) (saved bool, err error) {
-	return update(ctx, filename, geoLite2CityFilename, geoLite2CityURL)
+func UpdateGeoLite2City(ctx context.Context, filename, licenseKey string) (saved bool, err error) {
+	return update(ctx, filename, geoLite2CityFilename, geoLite2CityURL, licenseKey)
 }
 
 // UpdateGeoLite2ASN downloads and updates a GeoLite2 ASN database and saves it
 // under filename. MD5 sum of the tar archive is saved in a file in the same directory
 // for update checks.
-func UpdateGeoLite2ASN(ctx context.Context, filename string) (saved bool, err error) {
-	return update(ctx, filename, geoLite2ASNFilename, geoLite2ASNURL)
+func UpdateGeoLite2ASN(ctx context.Context, filename, licenseKey string) (saved bool, err error) {
+	return update(ctx, filename, geoLite2ASNFilename, geoLite2ASNURL, licenseKey)
 }
 
-func update(ctx context.Context, filename, dbname, url string) (saved bool, err error) {
-	req, err := http.NewRequest(http.MethodGet, url+".md5", nil)
+func update(ctx context.Context, filename, dbname, address, licenseKey string) (saved bool, err error) {
+	u, err := url.Parse(address)
 	if err != nil {
-		return false, errors.WithMessage(err, "http request md5 file")
+		return false, err
+	}
+	q := u.Query()
+	q.Set("license_key", licenseKey)
+	q.Set("suffix", "tar.gz.md5")
+	u.RawQuery = q.Encode()
+	req, err := http.NewRequest(http.MethodGet, u.String(), nil)
+	if err != nil {
+		return false, fmt.Errorf("http request md5 file: %w", err)
 	}
 	if ctx != nil {
 		req = req.WithContext(ctx)
 	}
 	r, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return false, errors.WithMessage(err, "get md5 file")
+		return false, fmt.Errorf("get md5 file: %w", err)
 	}
 	defer r.Body.Close()
+	if r.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("unexpected http response %s", r.Status)
+	}
 
 	md5, err := ioutil.ReadAll(r.Body)
 	if err != nil {
-		return false, errors.WithMessage(err, "download md5 file")
+		return false, fmt.Errorf("download md5 file: %w", err)
 	}
 	md5 = bytes.TrimSpace(md5)
 
@@ -87,7 +98,7 @@ func update(ctx context.Context, filename, dbname, url string) (saved bool, err 
 	if _, err := os.Stat(md5Filename); err == nil {
 		md5Current, err := ioutil.ReadFile(md5Filename)
 		if err != nil {
-			return false, errors.WithMessage(err, "open md5 file")
+			return false, fmt.Errorf("open md5 file: %w", err)
 		}
 		md5Current = bytes.TrimSpace(md5Current)
 
@@ -95,22 +106,27 @@ func update(ctx context.Context, filename, dbname, url string) (saved bool, err 
 			return false, nil
 		}
 	}
-	req, err = http.NewRequest(http.MethodGet, url, nil)
+	q.Set("suffix", "tar.gz")
+	u.RawQuery = q.Encode()
+	req, err = http.NewRequest(http.MethodGet, u.String(), nil)
 	if err != nil {
-		return false, errors.WithMessage(err, "http request")
+		return false, fmt.Errorf("http request: %w", err)
 	}
 	if ctx != nil {
 		req = req.WithContext(ctx)
 	}
 	r, err = http.DefaultClient.Do(req)
 	if err != nil {
-		return false, errors.WithMessage(err, "get tar")
+		return false, fmt.Errorf("get tar: %w", err)
 	}
 	defer r.Body.Close()
+	if r.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("unexpected http response %s", r.Status)
+	}
 
 	gzr, err := gzip.NewReader(r.Body)
 	if err != nil {
-		return false, errors.WithMessage(err, "gzip reader")
+		return false, fmt.Errorf("gzip reader: %w", err)
 	}
 
 	tr := tar.NewReader(gzr)
@@ -121,29 +137,29 @@ func update(ctx context.Context, filename, dbname, url string) (saved bool, err 
 			if err == io.EOF {
 				break
 			}
-			return false, errors.WithMessage(err, "read tar")
+			return false, fmt.Errorf("read tar: %w", err)
 		}
-		if strings.HasSuffix(header.Name, dbname) {
+		if strings.HasSuffix(header.Name, "/"+dbname) {
 			if err := os.MkdirAll(filepath.Dir(filename), 0777); err != nil {
-				return false, errors.WithMessage(err, "create directory")
+				return false, fmt.Errorf("create directory: %w", err)
 			}
 			writer, err := os.Create(filename)
 			if err != nil {
-				return false, errors.WithMessage(err, "create db file")
+				return false, fmt.Errorf("create db file: %w", err)
 			}
 			_, err = io.Copy(writer, tr)
-			err = errors.WithMessage(err, "write db file")
-			writer.Close()
-			if err == nil {
-				saved = true
+			_ = writer.Close()
+			if err != nil {
+				return false, fmt.Errorf("write db file: %w", err)
 			}
+			saved = true
 			break
 		}
 	}
 
 	if saved {
 		if err := ioutil.WriteFile(md5Filename, md5, 0666); err != nil {
-			return false, errors.WithMessage(err, "write md5 file")
+			return false, fmt.Errorf("write md5 file: %w", err)
 		}
 		if setTestM5Filename != nil {
 			setTestM5Filename(md5Filename)
